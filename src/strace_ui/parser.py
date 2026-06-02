@@ -380,8 +380,6 @@ def merge_resumed(original: ParsedLine, resumed: ParsedLine) -> ParsedLine:
     else:
         if left.endswith(","):
             left = left[:-1].rstrip()
-        if right.startswith(","):
-            right = right[1:].lstrip()
         args_raw = left + ", " + right
 
     # Unwrap Resumed wrapper if present

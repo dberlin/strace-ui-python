@@ -110,9 +110,17 @@ def test_parse_nested_parens_in_args():
 
 
 def test_merge_resumed():
-    orig = parse_line(0, '7 2.5 recvmsg(3, {a=1} <unfinished ...>')
-    res = parse_line(1, '7 2.6 <... recvmsg resumed>, 0) = 64 <0.0001>')
+    orig = parse_line(0, '7 2.5 recvmsg(3, {a=1}, <unfinished ...>')
+    res = parse_line(1, '7 2.6 <... recvmsg resumed> 0) = 64 <0.0001>')
     merged = merge_resumed(orig, res)
     assert merged.args_raw == "3, {a=1}, 0"
     assert merged.result == ValueResult("64")
     assert abs(merged.duration - 0.0001) < 1e-9
+
+
+def test_merge_resumed_empty_left():
+    # unfinished with no captured args yet
+    orig = parse_line(0, '7 2.5 read( <unfinished ...>')
+    res = parse_line(1, '7 2.6 <... read resumed> 3, "x", 1) = 1 <0.0002>')
+    merged = merge_resumed(orig, res)
+    assert merged.args_raw == '3, "x", 1'
