@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 from strace_ui.schema import Family
+from strace_ui.fd_tracker import FdTracker, FdId
 
 
 # ---------------------------------------------------------------------------
@@ -351,3 +352,120 @@ def add_pid_filter(t: list[Term], pid: int) -> list[Term]:
 
 def add_pid_exclusion(t: list[Term], pid: int) -> list[Term]:
     return t + [ExcludePid(pid)]
+
+
+# ---------------------------------------------------------------------------
+# SyscallInfo (for passes)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SyscallInfo:
+    """Input record for filter evaluation."""
+    syscall_name: str
+    pid: int
+    fd_ids: list
+    raw_line: str
+
+
+# ---------------------------------------------------------------------------
+# passes — ancestry helpers + main evaluator
+# ---------------------------------------------------------------------------
+
+
+def is_ancestor(fd_tracker: "FdTracker", *, pid: int, target: int) -> bool:
+    """Return True if *pid* is an ancestor of *target* in the fork tree.
+
+    Walks from *target* upward through parent_pid links.  Stops at *pid*
+    (True) or when there is no more parent (False).  A visited set prevents
+    infinite loops.
+    """
+    visited: set[int] = set()
+
+    def walk(current: int) -> bool:
+        if current == pid:
+            return True
+        if current in visited:
+            return False
+        visited.add(current)
+        parent = fd_tracker.parent_pid(pid=current)
+        if parent is not None:
+            return walk(parent)
+        return False
+
+    return walk(target)
+
+
+def is_related(fd_tracker: "FdTracker", *, pid: int, target: int) -> bool:
+    """Return True if *pid* and *target* are the same process or related by ancestry."""
+    return (
+        pid == target
+        or is_ancestor(fd_tracker, pid=pid, target=target)
+        or is_ancestor(fd_tracker, pid=target, target=pid)
+    )
+
+
+def passes(terms: list[Term], info: "SyscallInfo", *, fd_tracker: "FdTracker") -> bool:
+    """Evaluate whether *info* passes the filter described by *terms*.
+
+    Rules (port of OCaml lines 264-333):
+    - Empty filter  → always True.
+    - No inclusions → everything passes unless explicitly excluded.
+    - Inclusions    → only included names/families pass.
+    - Exclusions, pid/fd/regex constraints are applied on top.
+    """
+    if is_empty(terms):
+        return True
+
+    syscall_name = info.syscall_name
+    pid = info.pid
+    fd_ids = info.fd_ids
+    raw_line = info.raw_line
+
+    # Determine whether any inclusion terms are present
+    has_inclusions = any(
+        isinstance(term, (IncludeFamily, IncludeSyscall)) for term in terms
+    )
+
+    # Inclusion check
+    if has_inclusions:
+        included = any(
+            (isinstance(term, IncludeFamily) and term.family.includes(syscall_name))
+            or (isinstance(term, IncludeSyscall) and term.name == syscall_name)
+            for term in terms
+        )
+    else:
+        included = True
+
+    # Exclusion check
+    excluded = any(
+        isinstance(term, ExcludeSyscall) and term.name == syscall_name
+        for term in terms
+    )
+
+    # PID constraints: every FilterPid / ExcludePid / FilterRelatedPid must pass
+    pid_ok = all(
+        (not isinstance(term, FilterPid) or term.pid == pid)
+        and (not isinstance(term, ExcludePid) or term.pid != pid)
+        and (not isinstance(term, FilterRelatedPid) or is_related(fd_tracker, pid=pid, target=term.pid))
+        for term in terms
+    )
+
+    # FD constraints: every FilterFd term must have a matching fd_id in info.fd_ids
+    fd_ok = all(
+        not isinstance(term, FilterFd)
+        or any(
+            fid.fd_number == term.fd_number
+            and (term.generation is None or fid.generation == term.generation)
+            for fid in fd_ids
+        )
+        for term in terms
+    )
+
+    # Regex constraints: every Regex term must match the raw line
+    regex_ok = all(
+        not isinstance(term, Regex) or term.matches(raw_line)
+        for term in terms
+    )
+
+    return included and not excluded and pid_ok and fd_ok and regex_ok
