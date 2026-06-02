@@ -34,28 +34,18 @@ class Call:
 
 @dataclass(frozen=True)
 class Struct:
-    fields: list  # list[tuple[str, Value]]
+    fields: tuple[tuple[str, "Value"], ...]
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Struct):
-            return NotImplemented
-        return self.fields == other.fields
-
-    def __hash__(self) -> int:
-        return hash(tuple(self.fields))
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fields", tuple(self.fields))
 
 
 @dataclass(frozen=True)
 class Array:
-    elems: list  # list[Value]
+    elems: tuple["Value", ...]
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Array):
-            return NotImplemented
-        return self.elems == other.elems
-
-    def __hash__(self) -> int:
-        return hash(tuple(self.elems))
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "elems", tuple(self.elems))
 
 
 Value = Atom | String | Struct | Call | Array
@@ -81,18 +71,14 @@ def parse(s: str) -> Value:
 
     if s.startswith('"'):
         # Strip ONE leading and ONE trailing quote.
-        content = s
-        if content.startswith('"'):
-            content = content[1:]
+        content = s[1:]
         if content.endswith('"'):
             content = content[:-1]
         return String(content)
 
     if s.startswith('{'):
         # Struct: {key=value, key=value, ...}
-        inner = s
-        if inner.startswith('{'):
-            inner = inner[1:]
+        inner = s[1:]
         if inner.endswith('}'):
             inner = inner[:-1]
         inner = inner.strip()
@@ -113,9 +99,7 @@ def parse(s: str) -> Value:
 
     if s.startswith('['):
         # Array: [elem, elem, ...]
-        inner = s
-        if inner.startswith('['):
-            inner = inner[1:]
+        inner = s[1:]
         if inner.endswith(']'):
             inner = inner[:-1]
         inner = inner.strip()
@@ -130,10 +114,7 @@ def parse(s: str) -> Value:
         name = s[:paren_pos]
         rest = s[paren_pos + 1:]
         if name.strip() and rest.strip().endswith(')'):
-            arg = rest.strip()
-            if arg.endswith(')'):
-                arg = arg[:-1]
-            arg = arg.strip()
+            arg = rest.strip()[:-1].strip()
             return Call(name.strip(), arg)
 
     return Atom(s)
