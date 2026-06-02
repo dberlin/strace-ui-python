@@ -112,6 +112,78 @@ def wrap_string(s: str, width: int) -> list[str]:
     return lines
 
 
+def hexdump_bytes_per_line(width: int, total_bytes: int) -> int:
+    """Compute best bytes-per-line for a hexdump given available width and total buffer length.
+
+    Offset prefix: 4 hex digits for <=64KB, 8 otherwise.
+    Line with N bytes and P-digit offset: (P+1) + 3*N + floor((N-1)/8) + 2 + N + 1
+    = (P+4) + 4*N + (N-1)/8.
+    """
+    offset_digits = 8 if total_bytes > 0xFFFF else 4
+    fixed = offset_digits + 1 + 1 + 1
+
+    def try_n(n: int) -> int:
+        line_width = fixed + (4 * n) + ((n - 1) // 8)
+        if line_width > width:
+            return try_n(n - 8)
+        return n
+
+    start = (((width - fixed) // 4 // 8) + 1) * 8
+    max_fits = max(8, try_n(max(8, start)))
+    # Pick smallest multiple-of-8 group count that covers total_bytes
+    groups = (total_bytes + 7) // 8
+    max_needed = max(1, groups) * 8
+    return min(max_fits, max_needed)
+
+
+def extract_ip_addresses(s: str) -> list[str]:
+    """Extract all unique valid IPv4 addresses from a string, sorted ascending."""
+    ips: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if s[i].isdigit():
+            start = i
+            dot_count = 0
+            while i < n and (s[i].isdigit() or s[i] == "."):
+                if s[i] == ".":
+                    dot_count += 1
+                i += 1
+            if dot_count == 3:
+                candidate = s[start:i]
+                parts = candidate.split(".")
+                if (
+                    len(parts) == 4
+                    and all(
+                        p
+                        and p.isdigit()
+                        and int(p) <= 255
+                        for p in parts
+                    )
+                ):
+                    ips.append(candidate)
+        else:
+            i += 1
+    # Dedup and sort
+    return sorted(set(ips))
+
+
+def resolve_ips_in_string(s: str, dns_cache: dict[str, str]) -> str:
+    """Replace all IP addresses with their resolved hostnames from dns_cache."""
+    for ip, hostname in dns_cache.items():
+        s = s.replace(ip, hostname)
+    return s
+
+
+def compact_args_raw(args_raw: str) -> str:
+    """Produce compact args string for list view, stripping fd annotations."""
+    if not args_raw.strip():
+        return ""
+    args = [a.strip() for a in split_top_level(args_raw, on=",")]
+    compact_args = [strip_fd_annotations(a.strip()) for a in args]
+    return ", ".join(compact_args)
+
+
 def split_top_level(s: str, on: str) -> list[str]:
     """Split s on delimiter `on`, but only at depth 0 (not inside brackets or strings)."""
     result: list[str] = []
