@@ -437,7 +437,8 @@ def find_filtered_index_matching_filter(
 # re_resolve_child_fds (OCaml lines 200-234)
 # ---------------------------------------------------------------------------
 
-_FORK_SYSCALLS = frozenset({"clone", "clone3", "fork", "vfork"})
+# Reuse the same set defined in fd_tracker (single source of truth)
+from strace_ui.fd_tracker import fork_syscalls as _FORK_SYSCALLS  # noqa: E402
 
 
 def re_resolve_child_fds(
