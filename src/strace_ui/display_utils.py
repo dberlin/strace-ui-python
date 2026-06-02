@@ -1,6 +1,46 @@
 """display_utils: faithful Python port of OCaml display_utils.ml"""
 
 
+def split_top_level(s: str, on: str) -> list[str]:
+    """Split s on delimiter `on`, but only at depth 0 (not inside brackets or strings).
+
+    `on` must be exactly one character.
+    """
+    result: list[str] = []
+    current: list[str] = []
+    depth = 0
+    in_string = False
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if in_string:
+            current.append(c)
+            if c == '"':
+                k = i - 1
+                backslashes = 0
+                while k >= 0 and s[k] == "\\":
+                    backslashes += 1
+                    k -= 1
+                if backslashes % 2 == 0:
+                    in_string = False
+        elif c == on and depth == 0:
+            result.append("".join(current))
+            current = []
+        else:
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == '"':
+                in_string = True
+            current.append(c)
+        i += 1
+    if current:
+        result.append("".join(current))
+    return result
+
+
 def decode_strace_escapes(s: str) -> str:
     """Decode strace escape sequences into raw bytes.
 
@@ -117,19 +157,17 @@ def hexdump_bytes_per_line(width: int, total_bytes: int) -> int:
 
     Offset prefix: 4 hex digits for <=64KB, 8 otherwise.
     Line with N bytes and P-digit offset: (P+1) + 3*N + floor((N-1)/8) + 2 + N + 1
-    = (P+4) + 4*N + (N-1)/8.
+    = (P+3) + 4*N + (N-1)/8.
     """
     offset_digits = 8 if total_bytes > 0xFFFF else 4
     fixed = offset_digits + 1 + 1 + 1
 
-    def try_n(n: int) -> int:
-        line_width = fixed + (4 * n) + ((n - 1) // 8)
-        if line_width > width:
-            return try_n(n - 8)
-        return n
-
     start = (((width - fixed) // 4 // 8) + 1) * 8
-    max_fits = max(8, try_n(max(8, start)))
+    n = max(8, start)
+    while (fixed + (4 * n) + ((n - 1) // 8)) > width and n > 8:
+        n -= 8
+    max_fits = max(8, n)
+
     # Pick smallest multiple-of-8 group count that covers total_bytes
     groups = (total_bytes + 7) // 8
     max_needed = max(1, groups) * 8
@@ -180,42 +218,5 @@ def compact_args_raw(args_raw: str) -> str:
     if not args_raw.strip():
         return ""
     args = [a.strip() for a in split_top_level(args_raw, on=",")]
-    compact_args = [strip_fd_annotations(a.strip()) for a in args]
+    compact_args = [strip_fd_annotations(a) for a in args]
     return ", ".join(compact_args)
-
-
-def split_top_level(s: str, on: str) -> list[str]:
-    """Split s on delimiter `on`, but only at depth 0 (not inside brackets or strings)."""
-    result: list[str] = []
-    current: list[str] = []
-    depth = 0
-    in_string = False
-    i = 0
-    n = len(s)
-    while i < n:
-        c = s[i]
-        if in_string:
-            current.append(c)
-            if c == '"':
-                k = i - 1
-                backslashes = 0
-                while k >= 0 and s[k] == "\\":
-                    backslashes += 1
-                    k -= 1
-                if backslashes % 2 == 0:
-                    in_string = False
-        elif c == on and depth == 0:
-            result.append("".join(current))
-            current = []
-        else:
-            if c in "([{":
-                depth += 1
-            elif c in ")]}":
-                depth -= 1
-            elif c == '"':
-                in_string = True
-            current.append(c)
-        i += 1
-    if current:
-        result.append("".join(current))
-    return result

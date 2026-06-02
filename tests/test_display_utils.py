@@ -100,3 +100,17 @@ def test_hexdump_bytes_per_line_small_buffer_caps_to_need():
 
 def test_compact_args_strips_fd_annotations():
     assert compact_args_raw('3</a/b>, "hi", 0x5') == '3, "hi", 0x5'
+
+
+def test_wrap_string_zero_width():
+    assert wrap_string("abc", width=0) == ["abc"]
+
+
+def test_hexdump_bytes_per_line_large_buffer_uses_8digit_offset():
+    n = hexdump_bytes_per_line(width=80, total_bytes=0x10000)
+    assert n % 8 == 0 and n >= 8
+
+
+def test_decode_x_escape_too_short_is_literal():
+    # "\x" with fewer than 2 trailing hex chars falls through to literal handling
+    assert decode_strace_escapes(r"\x4") == r"\x4"
