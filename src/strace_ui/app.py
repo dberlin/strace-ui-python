@@ -288,7 +288,7 @@ class StraceUiApp(App):
                 break
             line = line_bytes.decode("utf-8", errors="replace").rstrip("\n")
             if line:
-                self.call_from_thread(self.dispatch, AddLine(line))
+                self.dispatch(AddLine(line))
 
         # Wait for strace to exit
         try:
@@ -306,7 +306,7 @@ class StraceUiApp(App):
                 except Exception:
                     pass
             msg = f"strace: {stderr_line}" if stderr_line else "strace exited with an error"
-            self.call_from_thread(self.notify, msg, severity="error")
+            self.notify(msg, severity="error")
 
     def _kill_strace(self) -> None:
         if self._strace_proc is not None:
