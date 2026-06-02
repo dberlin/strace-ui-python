@@ -120,6 +120,10 @@ class StraceUiApp(App):
         self._strace_proc: Optional[asyncio.subprocess.Process] = None
         self._man_inflight: set[str] = set()
         self._dns_inflight: set[str] = set()
+        # Cache of the last-rendered detail "key"; lets us skip the (expensive)
+        # detail re-render when nothing the detail pane shows has changed —
+        # e.g. when new syscalls are appended without moving the selection.
+        self._detail_key: object = object()
 
     # ------------------------------------------------------------------
     # Layout
@@ -146,6 +150,10 @@ class StraceUiApp(App):
         """Kill strace on exit."""
         self._kill_strace()
 
+    def on_resize(self, event: object) -> None:
+        """Re-render the detail pane on resize (its layout is width-dependent)."""
+        self._refresh_widgets(force_detail=True)
+
     # ------------------------------------------------------------------
     # Theme helpers
     # ------------------------------------------------------------------
@@ -169,7 +177,28 @@ class StraceUiApp(App):
         self._refresh_widgets()
         self._check_effects()
 
-    def _refresh_widgets(self) -> None:
+    def _detail_render_key(self) -> object:
+        """A cheap value capturing everything the detail pane renders from.
+
+        When this is unchanged between dispatches we can skip the (expensive)
+        detail re-render. Appending syscalls that don't move the selection
+        leaves this unchanged, so a high-volume trace no longer re-renders the
+        detail pane on every line (which was starving keyboard input).
+        """
+        m = self.model
+        sel = m.get_selected()
+        if sel is None:
+            return (None,)
+        return (
+            sel.index,
+            m.render_mode,
+            m.show_man_page,
+            m.focus,
+            m.man_page_cache.get(sel.syscall_name),
+            tuple(sorted(m.dns_cache.items())),
+        )
+
+    def _refresh_widgets(self, *, force_detail: bool = False) -> None:
         try:
             list_widget = self.query_one(SyscallListWidget)
             list_widget.refresh()
@@ -177,7 +206,10 @@ class StraceUiApp(App):
             pass
         try:
             detail_widget = self.query_one(DetailWidget)
-            detail_widget.update_detail()
+            key = self._detail_render_key()
+            if force_detail or key != self._detail_key:
+                self._detail_key = key
+                detail_widget.update_detail()
         except Exception:
             pass
         try:
