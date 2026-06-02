@@ -449,7 +449,8 @@ def re_resolve_child_fds(
     """After a fork/clone, re-resolve fds for any child syscalls already in the list.
 
     Returns a new resolved_fds dict (copy-on-write semantics).
-    Port of OCaml lines 200-234.
+    Port of OCaml lines 200-234, extended to handle synthesized pre-fork FdIds:
+    also re-resolves when existing ids are all synthesized (source_pid == child).
     """
     if line.syscall_name not in _FORK_SYSCALLS:
         return resolved_fds
@@ -464,7 +465,14 @@ def re_resolve_child_fds(
         item = syscall_list.get_raw(i)
         if item.pid == child:
             existing = new_resolved.get(item.index)
-            if not existing:  # None or empty list
+            # Re-resolve if: None, empty, or all FdIds are synthesized with child pid
+            # (synthesized means source_pid == child, which happens when the child's
+            # fd table doesn't exist yet at resolution time — now it does after fork)
+            should_resolve = (
+                not existing
+                or all(fid.source_pid == child for fid in existing)
+            )
+            if should_resolve:
                 fd_ids = resolve_fds(item, fd_tracker=fd_tracker)
                 new_resolved[item.index] = fd_ids
     return new_resolved
@@ -632,19 +640,24 @@ def apply_action(model: Model, action: object) -> Model:
                     next_index=model.next_index + 1,
                 )
             else:
-                # No matching pending; treat as normal completed (use parsed)
-                fd_ids_before = resolve_fds(parsed, fd_tracker=model.fd_tracker)
-                new_tracker = model.fd_tracker.update(parsed)
-                fd_ids_after = resolve_fds(parsed, fd_tracker=new_tracker)
+                # No matching pending; treat as normal completed.
+                # Unwrap Resumed wrapper so the stored result is the inner value.
+                if isinstance(parsed.result, parser.Resumed):
+                    unwrapped = dataclasses.replace(parsed, result=parsed.result.inner)
+                else:
+                    unwrapped = parsed
+                fd_ids_before = resolve_fds(unwrapped, fd_tracker=model.fd_tracker)
+                new_tracker = model.fd_tracker.update(unwrapped)
+                fd_ids_after = resolve_fds(unwrapped, fd_tracker=new_tracker)
                 fd_ids = sorted(set(fd_ids_before + fd_ids_after))
-                resolved = {**model.resolved_fds, parsed.index: fd_ids}
+                resolved = {**model.resolved_fds, unwrapped.index: fd_ids}
                 new_list = model.syscall_list.append(
-                    parsed,
+                    unwrapped,
                     passes_filter=passes_filter(
-                        parsed, model.syscall_filter, new_tracker, resolved
+                        unwrapped, model.syscall_filter, new_tracker, resolved
                     ),
                 )
-                resolved = re_resolve_child_fds(new_list, new_tracker, resolved, parsed)
+                resolved = re_resolve_child_fds(new_list, new_tracker, resolved, unwrapped)
                 return dataclasses.replace(
                     model,
                     syscall_list=new_list,
