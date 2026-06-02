@@ -245,7 +245,7 @@ def test_wrap_string():
 
 - [ ] **Step 3: Implement the four functions**
 
-`decode_strace_escapes`: walk chars; on `\` look at next char: `n`→`\n`, `t`→`\t`, `r`→`\r`, `\\`→`\\`, `"`→`"`, `0`→`\x00`, `x`+2 hex digits→that byte (if the 2 chars aren't valid hex, emit a literal backslash and advance 1), any other → emit backslash + that char. A `\` with no following char → literal backslash. (Note: decoded bytes are produced as a `str`; `chr(n)` for the hex byte, matching the OCaml which builds an OCaml string of bytes. For hexdump rendering these are treated as code points 0-255.)
+`decode_strace_escapes`: walk chars; on `\` look at next char: `n`→`\n`, `t`→`\t`, `r`→`\r`, `\\`→`\\`, `"`→`"`, `0`→`\x00`, `x`+2 hex digits→that byte (if the 2 chars aren't valid hex, emit a literal backslash and advance 1), any other → emit backslash + that char. A `\` with no following char → literal backslash. **Boundary detail (match OCaml exactly):** the `\x` branch only applies when there are at least 2 chars after the `x` (OCaml guard `i+3 < len`); when `\x` is too close to end-of-string, it falls through to the generic "any other" branch (emit `\` + `x`), not the invalid-hex branch. (Note: decoded bytes are produced as a `str`; `chr(n)` for the hex byte, matching the OCaml which builds an OCaml string of bytes. For hexdump rendering these are treated as code points 0-255.)
 
 `split_escaped_at_byte(s, byte_count)`: walk logical bytes; `\xNN` consumes 4 source chars, any other `\c` consumes 2, plain char consumes 1; stop after `byte_count` logical bytes; return `(s[:split_pos], s[split_pos:])`.
 
@@ -401,21 +401,33 @@ def test_to_lines_array_tree():
 Define five frozen dataclasses as the tagged union (this is the **established union pattern** for the whole project):
 
 ```python
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
-class Atom:   value: str
+class Atom:
+    value: str
+
 @dataclass(frozen=True)
-class String: value: str
+class String:
+    value: str
+
 @dataclass(frozen=True)
-class Struct: fields: tuple  # tuple[tuple[str, Value], ...]  -- but tests compare lists
+class Call:
+    name: str
+    arg: str
+
 @dataclass(frozen=True)
-class Call:   name: str; arg: str
+class Struct:
+    fields: list  # list[tuple[str, Value]]
+
 @dataclass(frozen=True)
-class Array:  elems: tuple
+class Array:
+    elems: list  # list[Value]
+
+Value = Atom | String | Struct | Call | Array
 ```
 
-> **Note on equality with lists:** the tests above compare `Struct([...])` and `Array([...])` using list literals. Make `Struct`/`Array` store the sequence as a plain `list` field on a `@dataclass(frozen=True)` (frozen prevents reassignment, not mutation of the list — acceptable here). Then `Struct([...]) == Struct([...])` compares lists. Keep `fields` a `list[tuple[str, Value]]` and `elems` a `list[Value]`. Adjust the dataclass definitions accordingly.
+> **Note on equality with lists:** the tests compare `Struct([...])`/`Array([...])` using list literals. `Struct`/`Array` store the sequence as a plain `list` field on a `@dataclass(frozen=True)` (frozen blocks reassigning the field, not mutating the list — acceptable here), so dataclass `==` compares the lists element-by-element.
 
 `parse(s)` (port `strace_value.ml` lines 20-78): strip; empty → `Atom("")`; starts with `"` → strip one leading/trailing quote → `String`; starts with `{` → strip braces, `split_top_level(inner, ",")`, each field: strip, skip empty, split on first `=` → `(key.strip(), parse(value.strip()))`, no `=` → `(field, Atom(""))` → `Struct`; starts with `[` → strip brackets, empty inner → `Array([])` else split + parse each → `Array`; else if `name(arg)` shape (split on first `(`, non-empty name, stripped rest ends with `)`) → `Call(name, inner)`; else `Atom(s)`.
 
@@ -663,7 +675,7 @@ def test_family_all_includes_everything():
 
 - [ ] **Step 3: Implement the type machinery + Family**
 
-- `ArgType`: an `Enum` with the 15 named members plus an `OTHER` carrying a string. Simplest faithful approach: make `ArgType` a frozen dataclass with a `kind: str` and optional `other: str|None`, and expose module-level constants `FILE_DESCRIPTOR`, `PATH`, ... Or use `enum.Enum` for the fixed set and handle `Other` separately. **Recommendation:** `enum.Enum` for the 15 fixed kinds (no `Other` is used by the actual 119-entry table — verify against source; if unused, drop `Other` per YAGNI). Add `is_file_descriptor(self) -> bool` returning `self is ArgType.FILE_DESCRIPTOR`.
+- `ArgType`: the 15 named kinds **plus an `OTHER(str)` variant that carries a payload string**. This payload IS used by the table — `poll` and `ppoll` use `Arg_type.Other "nfds_t"` (syscall_schema.ml:767, 778) — so it must be representable; a bare `enum.Enum` cannot hold the payload. **Use this design:** a frozen dataclass `ArgType(kind: str, other: str | None = None)` with module-level singletons for the 15 fixed kinds (`FILE_DESCRIPTOR = ArgType("file_descriptor")`, `PATH = ArgType("path")`, …, `MODE = ArgType("mode")`) and a helper `ArgType.other(s) -> ArgType` returning `ArgType("other", s)`. Add `is_file_descriptor(self) -> bool` returning `self.kind == "file_descriptor"`. The fixed singletons compare by identity *and* value (frozen dataclass `==`); tests use `is ArgType.FILE_DESCRIPTOR` which holds for the singletons.
 - `ReturnType`: `enum.Enum` (FILE_DESCRIPTOR, INT, SSIZE, POINTER, VOID, PID, OFF) with `is_file_descriptor`.
 - `ArgSpec(name, arg_type)`, `Signature(c_signature, args, return_type)` frozen dataclasses.
 - `SyscallInfo(name, signatures, brief, man_section)` with `best_signature(arg_count)`: exact arg-count match else the signature with the most args (else first).
@@ -717,6 +729,11 @@ def test_openat_is_fd_return():
 def test_socket_lookup():
     assert lookup("socket") is not None
 
+def test_poll_uses_other_argtype():
+    # poll's 2nd arg is `Arg_type.Other "nfds_t"` in the OCaml table.
+    nfds = lookup("poll").signatures[0].args[1].arg_type
+    assert nfds.kind == "other" and nfds.other == "nfds_t"
+
 def test_unknown_lookup_none():
     assert lookup("definitely_not_a_syscall") is None
 ```
@@ -725,7 +742,7 @@ def test_unknown_lookup_none():
 
 - [ ] **Step 3: Port the table**
 
-Translate every entry from the OCaml `known_syscalls` alist into a Python `dict[str, SyscallInfo]` named `KNOWN_SYSCALLS`. The OCaml uses short aliases (`fd`, `path`, `ptr`, `int_`, `uint`, `size`, `off`, `flags`, `buf`, `pid`, `sig_`, `mode`, `struct_`, `sockaddr`) — map each to the corresponding `ArgType` member. Use a small local helper to keep it terse:
+Translate every entry from the OCaml `known_syscalls` alist into a Python `dict[str, SyscallInfo]` named `KNOWN_SYSCALLS`. The OCaml uses short aliases (`fd`, `path`, `ptr`, `int_`, `uint`, `size`, `off`, `flags`, `buf`, `pid`, `sig_`, `mode`, `struct_`, `sockaddr`) — map each to the corresponding `ArgType` singleton. The inline form `Arg_type.Other "nfds_t"` (used by `poll`/`ppoll`) maps to `ArgType.other("nfds_t")`. Use a small local helper to keep it terse:
 
 ```python
 def _a(name, t): return ArgSpec(name, t)
@@ -962,7 +979,7 @@ def test_empty_regex_dropped():
 
 - [ ] **Step 3: Implement the Term union, tokenizer, parser, serializers**
 
-Define the eight term dataclasses (frozen). `Regex` wraps a compiled `re.Pattern`; give it a `.matches(s)` helper and `.pattern` property; implement `__eq__` by compiled pattern string so tests comparing `Regex` instances work (or compare via `to_normalized_string`). For equality in `test_parse_regex` we only check `isinstance` + `matches`, so a value-based `__eq__` is optional but recommended.
+Define the eight term dataclasses (frozen). `FilterFd` must have field order `(fd_number: int, generation: int | None)` so the Task 12 test's positional construction `FilterFd(3, None)` / `FilterFd(4, 2)` is correct. `Regex` wraps a compiled `re.Pattern`; give it a `.matches(s)` helper and `.pattern` property; implement `__eq__` by compiled pattern string so tests comparing `Regex` instances work (or compare via `to_normalized_string`). For equality in `test_parse_regex` we only check `isinstance` + `matches`, so a value-based `__eq__` is optional but recommended.
 
 Port `tokenize` (special `/regex/` handling: a regex token runs to the next unescaped `/` or end; everything else splits on spaces), `parse_simple_token`, `parse_regex_body` (backslash-slash → slash, other backslash kept), `make_regex_term` (invalid pattern → `re.escape` literal; empty → dropped), `parse`, `to_normalized_string`, `to_display_string`, `normalize`, and the `add_*` helpers.
 
@@ -1136,18 +1153,18 @@ git commit -m "feat: filter_editor pure state machine with emacs motions"
 
 ## Chunk 4: model (virtual list, render mode, reducer)
 
-### Task 15: `model` — VirtualList state
+### Task 15: `virtual_list` — VirtualList state
 
 **Files:**
-- Create: `src/strace_ui/model.py`
-- Test: `tests/test_model_virtuallist.py`
+- Create: `src/strace_ui/virtual_list.py`
+- Test: `tests/test_virtual_list.py`
 
-Reference: `/home/dannyb/sources/strace_ui/src/virtual_list.ml`.
+Reference: `/home/dannyb/sources/strace_ui/src/virtual_list.ml`. This is a self-contained unit with zero dependencies on the rest of the model, so it lives in its own module (mirroring the separate OCaml compilation unit) to keep `model.py` focused on the reducer. `model.py` will `from strace_ui.virtual_list import VirtualList` and re-export it (`from strace_ui.virtual_list import VirtualList  # re-export`) so later tasks and tests can import `VirtualList` from either module.
 
 - [ ] **Step 1: Write failing tests**
 
 ```python
-from strace_ui.model import VirtualList
+from strace_ui.virtual_list import VirtualList
 
 def test_append_and_counts():
     vl = VirtualList.create()
@@ -1200,7 +1217,7 @@ Immutable-style dataclass holding `all_items: list`, `filtered_indices: list[int
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/strace_ui/model.py tests/test_model_virtuallist.py
+git add src/strace_ui/virtual_list.py tests/test_virtual_list.py
 git commit -m "feat: VirtualList filtered-index state with selection preservation"
 ```
 
@@ -1253,6 +1270,17 @@ def test_buffer_meaningful_length_read():
     p = parse_line(0, '100 1.0 read(3, "abcdef", 100) = 4')
     assert buffer_meaningful_length(syscall_name="read", arg_index=1,
                                     args=['3', '"abcdef"', '100'], result=p.result) == 4
+
+def test_buffer_meaningful_length_write_uses_count_arg():
+    # write's meaningful length comes from arg 2 (count), not the return value.
+    p = parse_line(0, '100 1.0 write(1, "abcdef", 6) = 6')
+    assert buffer_meaningful_length(syscall_name="write", arg_index=1,
+                                    args=['1', '"abcdef"', '6'], result=p.result) == 6
+
+def test_buffer_meaningful_length_unknown_is_none():
+    p = parse_line(0, '100 1.0 read(3, "abc", 9) = 3')
+    assert buffer_meaningful_length(syscall_name="read", arg_index=0,
+                                    args=['3', '"abc"', '9'], result=p.result) is None
 ```
 
 - [ ] **Step 2: Run to verify failure.**
@@ -1387,6 +1415,28 @@ def test_fork_then_child_fd_reresolved():
     read_idx = 2
     fds = m.resolved_fds[read_idx]
     assert any(f.source_pid == 100 and f.fd_number == 3 for f in fds)
+
+def test_unfinished_clone_child_before_resume_gets_reresolved():
+    # The hard path: a child syscall arrives AFTER an unfinished clone but BEFORE it
+    # resumes. re_resolve_child_fds must rewrite the child line's empty resolved_fds
+    # once the clone resumes and the child's fd table appears.
+    m = default_model(resolve_pid_info=lambda pid: None)
+    m = feed(m,
+        '100 1.0 openat(AT_FDCWD, "/a", O_RDONLY) = 3',
+        '100 1.1 clone(child_stack=NULL <unfinished ...>',   # unfinished clone
+        '200 1.2 read(3, "x", 1) = 1',                       # child runs before resume
+        '100 1.3 <... clone resumed>) = 200',                # clone resumes -> child 200
+    )
+    read_idx = 2  # the child read's parsed index
+    fds = m.resolved_fds[read_idx]
+    assert any(f.source_pid == 100 and f.fd_number == 3 for f in fds)
+
+def test_resumed_without_pending_appends_new_row():
+    # A <... X resumed> with no matching unfinished entry is appended as its own row.
+    m = default_model(resolve_pid_info=lambda pid: None)
+    m = feed(m, '7 2.6 <... recvmsg resumed>, 0) = 64 <0.0001>')
+    assert m.syscall_list.total_count() == 1
+    assert m.syscall_list.get_raw(0).result == ValueResult("64")
 
 def test_set_filter_refilters():
     m = default_model(resolve_pid_info=lambda pid: None)
@@ -1651,7 +1701,7 @@ Port the focus-dependent dispatch from spec §3.10 exactly: Ctrl-c quit; F1/`?` 
 - [ ] **Step 3: Implement async effects**
 
 - **strace reader**: a Textual worker (`@work(thread=False)` / asyncio) reads lines from the pipe `asyncio.StreamReader` and calls `self.call_from_thread`/`self.dispatch(AddLine(line))` per line.
-- **man-page fetch**: when the selected syscall changes and `show_man_page` and the page is uncached, run `man --nj <section> <name>` via `asyncio.create_subprocess_exec` with `MANWIDTH` env = detail width; on completion `dispatch(SetManPage(...))`. Track the "current key" to avoid duplicate fetches (mirror the on_change edge).
+- **man-page fetch**: when the selected syscall changes and `show_man_page` and the page is uncached, run `man --nj <section> <name>` via `asyncio.create_subprocess_exec` with `MANWIDTH` env = `str(max(40, detail_width - 2))` (exact formula from `strace_ui_app.ml:1481`) and `<section>` = the schema's `man_section` (default `2` when the syscall isn't in the schema, matching line 1479); on completion `dispatch(SetManPage(...))`. On non-zero/failed `man`, store `f"Could not load man page for {name}"`. Track the "current key" to avoid duplicate fetches (mirror the on_change edge).
 - **reverse-DNS**: when the selected line's args contain unresolved IPs, resolve each via `loop.run_in_executor(None, socket.gethostbyaddr, ip)` (fall back to the IP on error) and `dispatch(SetDnsEntry(...))`.
 
 Implement these as reactions to selection/model changes (e.g. after each `dispatch`, check whether man/DNS work is needed). Keep them idempotent.
@@ -1686,8 +1736,7 @@ from strace_ui.cli import build_strace_args
 
 def test_build_args_program():
     args = build_strace_args(write_fd=7, trace_expr=None, attach_pid=None, program=["ping", "localhost"])
-    assert args[:9] == ["-ttt","-T","-f","-x","-yy","-v","-s","1024"][:8] + ["-o"]
-    assert "/dev/fd/7" in args
+    assert args[:10] == ["-ttt","-T","-f","-x","-yy","-v","-s","1024","-o","/dev/fd/7"]
     assert args[-3:] == ["--", "ping", "localhost"]
 
 def test_build_args_pid_and_expr():
@@ -1707,7 +1756,7 @@ def test_build_args_requires_target():
 
 - `build_strace_args(write_fd, trace_expr, attach_pid, program)` → the fixed flags `["-ttt","-T","-f","-x","-yy","-v","-s","1024","-o", f"/dev/fd/{write_fd}"]` + (`-e EXPR` if set) + (`-p PID` if attach else `-- prog args`; error if neither).
 - `main(argv=None)`:
-  - argparse mirroring the original flags: positional `program` (REMAINDER), `-e/--expr`, `-p/--pid` (int), `-theme/--theme` (default `Catppuccin_Mocha`, choices = theme names), `-build-info`, `-version`. Accept the single-dash spellings (`-theme`, `-e`, `-p`) the original documents; argparse supports single-dash long options.
+  - argparse mirroring the original flags: positional `program` (REMAINDER), `-e/--expr`, `-p/--pid` (int), `-theme/--theme` (default `Catppuccin_Mocha`, choices = theme names), `-build-info`, `-version`, and a help alias `-?` in addition to argparse's default `-h/--help` (the original documents `-help, -?`). Accept the single-dash spellings (`-theme`, `-e`, `-p`) the original documents; argparse supports single-dash long options. To wire `-?`, add it via `parser.add_argument("-?", action="help", ...)` (or intercept it in `argv` before parsing).
   - `-version`/`-build-info` → print and exit 0.
   - Create `os.pipe()`; set the write end inheritable (`os.set_inheritable(w, True)`); resolve the theme; build strace argv.
   - Launch strace with `asyncio.create_subprocess_exec("strace", *args, pass_fds=(w,))`, close `w` in the parent, wrap the read end in an `asyncio.StreamReader`.
