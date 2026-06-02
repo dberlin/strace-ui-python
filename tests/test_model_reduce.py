@@ -72,6 +72,10 @@ def test_fork_then_child_fd_reresolved():
     assert any(f.source_pid == 100 and f.fd_number == 3 for f in fds)
 
 
+# NOTE: Faithful OCaml would yield source_pid=200 here due to a latent bug — its
+# re_resolve_child_fds `None|[]` condition misses synthesized FdIds. This port
+# intentionally extends the condition (re-resolve when all FdIds have
+# source_pid == child_pid) to deliver re_resolve_child_fds' documented intent.
 def test_unfinished_clone_child_before_resume_gets_reresolved():
     m = default_model(resolve_pid_info=lambda pid: None)
     m = feed(m,
@@ -87,7 +91,10 @@ def test_resumed_without_pending_appends_new_row():
     m = default_model(resolve_pid_info=lambda pid: None)
     m = feed(m, '7 2.6 <... recvmsg resumed> 0) = 64 <0.0001>')
     assert m.syscall_list.total_count() == 1
-    assert m.syscall_list.get_raw(0).result == ValueResult("64")
+    from strace_ui.parser import Resumed, ValueResult
+    row = m.syscall_list.get_raw(0)
+    assert isinstance(row.result, Resumed)
+    assert row.result.inner == ValueResult("64")
 
 
 def test_set_filter_refilters():

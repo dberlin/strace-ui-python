@@ -641,24 +641,22 @@ def apply_action(model: Model, action: object) -> Model:
                     next_index=model.next_index + 1,
                 )
             else:
-                # No matching pending; treat as normal completed.
-                # Unwrap Resumed wrapper so the stored result is the inner value.
-                if isinstance(parsed.result, parser.Resumed):
-                    unwrapped = dataclasses.replace(parsed, result=parsed.result.inner)
-                else:
-                    unwrapped = parsed
-                fd_ids_before = resolve_fds(unwrapped, fd_tracker=model.fd_tracker)
-                new_tracker = model.fd_tracker.update(unwrapped)
-                fd_ids_after = resolve_fds(unwrapped, fd_tracker=new_tracker)
+                # No matching pending — store AS-IS with result=Resumed(inner),
+                # faithful to OCaml (lines 396-428): the Resumed wrapper is kept;
+                # fd_tracker.update is called with the Resumed result (a no-op for
+                # the tracker since it only mutates on a plain Value result).
+                fd_ids_before = resolve_fds(parsed, fd_tracker=model.fd_tracker)
+                new_tracker = model.fd_tracker.update(parsed)
+                fd_ids_after = resolve_fds(parsed, fd_tracker=new_tracker)
                 fd_ids = sorted(set(fd_ids_before + fd_ids_after))
-                resolved = {**model.resolved_fds, unwrapped.index: fd_ids}
+                resolved = {**model.resolved_fds, parsed.index: fd_ids}
                 new_list = model.syscall_list.append(
-                    unwrapped,
+                    parsed,
                     passes_filter=passes_filter(
-                        unwrapped, model.syscall_filter, new_tracker, resolved
+                        parsed, model.syscall_filter, new_tracker, resolved
                     ),
                 )
-                resolved = re_resolve_child_fds(new_list, new_tracker, resolved, unwrapped)
+                resolved = re_resolve_child_fds(new_list, new_tracker, resolved, parsed)
                 return dataclasses.replace(
                     model,
                     syscall_list=new_list,
