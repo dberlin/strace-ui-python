@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["textual>=0.60"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=1.0"]
 
 [project.scripts]
 strace-ui = "strace_ui.cli:main"
@@ -21,3 +21,4 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+asyncio_mode = "strict"
