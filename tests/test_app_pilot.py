@@ -329,6 +329,38 @@ async def test_filter_label_shows_expr():
 
 
 @pytest.mark.asyncio
+async def test_filter_edit_mode_is_visually_distinct():
+    """While editing, the list pane shows a clear FILTER prompt + block cursor;
+    when not editing it shows the normal Syscalls title."""
+    from strace_ui.widgets import SyscallListWidget
+
+    app = StraceUiApp(
+        model=default_model(resolve_pid_info=lambda pid: None),
+        theme=get_theme(default_theme_name()),
+        strace_argv=None,
+    )
+    async with app.run_test() as pilot:
+        app.dispatch(AddLine('100 1.0 read(3, "x", 1) = 1'))
+        await pilot.pause()
+        pane = app.query_one(SyscallListWidget)
+        assert "Syscalls" in str(pane.border_title)
+        assert "FILTER" not in str(pane.border_title)
+
+        await pilot.press("f")
+        for c in "mm":
+            await pilot.press(c)
+        await pilot.pause()
+        assert "FILTER" in str(pane.border_title), "no clear editing indicator in title"
+        assert "mm" in str(pane.border_subtitle)
+        assert "█" in str(pane.border_subtitle), "no visible cursor while editing"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert "Syscalls" in str(pane.border_title)
+        assert "FILTER" not in str(pane.border_title)
+
+
+@pytest.mark.asyncio
 async def test_filter_label_shows_edit_buffer():
     """During filter editing the in-progress buffer must appear in border_subtitle."""
     app = StraceUiApp(

@@ -16,6 +16,7 @@ from textual.app import RenderResult
 
 from strace_ui.render import render_syscall_row_text, render_detail, render_filter_label
 from strace_ui.model import Model, Focus
+from strace_ui.filter_editor import is_editing
 from strace_ui.themes import Theme
 
 
@@ -40,6 +41,16 @@ class SyscallListWidget(Widget):
     def __init__(self, app_ref: "StraceUiApp", **kwargs):
         super().__init__(**kwargs)
         self._app_ref = app_ref
+        self._editing_border: bool = False
+
+    def _set_border_color(self, color: str) -> None:
+        """Set the border colour, but only when it actually changes.
+
+        Mutating styles triggers a refresh; guarding on change avoids a loop.
+        """
+        if getattr(self, "_border_color", None) != color:
+            self._border_color = color
+            self.styles.border = ("round", color)
 
     def render(self) -> RenderResult:
         model: Model = self._app_ref.model
@@ -53,25 +64,37 @@ class SyscallListWidget(Widget):
 
         fc = model.filtered_count()
 
-        # Update border title with focus hint
-        focus_hint = "" if model.focus == Focus.SYSCALL_LIST else " <tab>"
-        filter_label = render_filter_label(
-            model.filter_editor,
-            current_filter=model.syscall_filter,
-            theme=theme,
-            max_chars=max(10, inner_width - 20),
-        )
         # Position indicator
         if fc > 0:
             pos_str = f"{model.selected_index() + 1}/{fc}"
         else:
             pos_str = "0/0"
 
-        # Show filter expression/edit buffer AND position counter together.
-        # border_subtitle only accepts str, so use .plain (colour lost on border).
-        filter_text = filter_label.plain.strip()
-        self.border_title = f"Syscalls{focus_hint}"
-        self.border_subtitle = f"{filter_text}  {pos_str}" if filter_text else pos_str
+        # --- Filter editor state: make "actively editing" unmistakable -------
+        if is_editing(model.filter_editor):
+            # Editing: light up the border, swap the title to a clear prompt,
+            # and show the buffer with a visible block cursor (the styled
+            # reverse-video cursor can't survive in a plain border string).
+            ed = model.filter_editor
+            buf, cursor = ed.buf, ed.cursor
+            shown = buf[:cursor] + "█" + buf[cursor:]  # █ block cursor
+            self._set_border_color(theme.accent)
+            self.border_title = "✎ FILTER  (↵ apply · esc cancel)"
+            self.border_subtitle = f"❯ {shown}"
+        else:
+            # Not editing: muted border, normal title, current filter + position.
+            focus_hint = "" if model.focus == Focus.SYSCALL_LIST else " <tab>"
+            filter_label = render_filter_label(
+                model.filter_editor,
+                current_filter=model.syscall_filter,
+                theme=theme,
+                max_chars=max(10, inner_width - 20),
+            )
+            # border_subtitle only accepts str, so use .plain (colour lost on border).
+            filter_text = filter_label.plain.strip()
+            self._set_border_color(theme.dim)
+            self.border_title = f"Syscalls{focus_hint}"
+            self.border_subtitle = f"{filter_text}  {pos_str}" if filter_text else pos_str
 
         if fc == 0:
             msg = Text("Waiting for syscalls...", style=Style(color=theme.dim))
