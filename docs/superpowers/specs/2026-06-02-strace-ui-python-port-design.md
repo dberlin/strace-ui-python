@@ -154,11 +154,23 @@ Hexdump *rendering* (the `hexdump_view.ml` styled output — offset column, hex 
 
 The in-place filter line editor with emacs keybindings. Pure state `{buf, cursor} | None` and `apply_action(state, current_filter, action) -> (state, submitted_filter_str | None)`. Actions: Start, Start_regex, Key(c), Backspace, Delete_forward, Move_left/right, Move_to_start/end, Kill_to_end/start, Kill_word_backward, Move_word_forward/backward, Submit, Cancel. Submit normalizes the buffer through `filter.normalize`. The scrolling/ellipsis label rendering (`render_label`) is reproduced in `render.py`. Lives as `filter_editor.py` (pure) + render hook. (Tested.)
 
+**Key map while editing** (captured in `app.py`, matches the original): `Enter`→Submit, `Escape`→Cancel, `Backspace`→Backspace, `Delete`→Delete_forward, `←/→`→Move_left/right, `Home`→Move_to_start, `End`→Move_to_end, `Ctrl-a`→Move_to_start, `Ctrl-e`→Move_to_end, `Ctrl-b`→Move_left, `Ctrl-f`→Move_right, `Ctrl-d`→Delete_forward, `Ctrl-k`→Kill_to_end, `Ctrl-u`→Kill_to_start, `Ctrl-w`→Kill_word_backward, `Alt-f`→Move_word_forward, `Alt-b`→Move_word_backward, any other printable ASCII → Key(c). The editor is entered from the list view via `f`→Start and `/`→Start_regex.
+
 ### 3.10 `render.py`, `widgets.py`, `app.py`, `cli.py` (← strace_ui_app.ml shell + bin/main.ml)
 
 - `render.py` — Rich renderables: `render_syscall_line` (pid short-id column, colored name, compacted/truncated args, truncated result with fd-vs-value coloring, fill), `render_detail` (header with time/pid/duration/signatures/brief, args section with schema names + tree/hexdump/buffer rendering + fd-origin lines, result section, raw section, man section), the styled `hexdump` renderer, the value-tree renderer, the help modal, and the filter-editor label.
 - `widgets.py` — a custom Textual widget for the virtual list (renders only the visible window from the model) and the detail-pane scroller. Two bordered panes with titles/hints; help overlay.
-- `app.py` — the Textual `App`: builds layout from terminal size (golden-ratio split, `min(50, …)` list cap), binds keys to actions (full set above + filter-edit mode capturing keys while editing), holds the `Model`, and re-renders on change. Async effects via Textual workers / asyncio:
+- `app.py` — the Textual `App`: builds layout from terminal size (golden-ratio split, `min(50, …)` list cap), binds keys to actions (full set above + filter-edit mode capturing keys while editing), holds the `Model`, and re-renders on change.
+
+  **Focus-dependent key dispatch (matches the original):**
+  - `Ctrl-c`→quit; `F1`/`?`→Toggle_help. While help is shown, **any** key dismisses it (single `Toggle_help`), checked before other handling.
+  - `Tab` (and `Shift-Tab`)→Toggle_focus.
+  - While the filter editor is active, keys route to the filter-edit key map (see §3.9) and nothing else.
+  - `f`→start filter edit, `/`→start regex edit, `%`→Cycle_preset_filter, `h`→Hide_selected, `H`→Show_only_selected, `p`→Filter_selected_pid, `P`→Exclude_selected_pid, `x`→Toggle_render_mode, `m`→Toggle_man_page, `F`→Follow_fd, `<`→Jump_fd_prev, `>`→Jump_fd_next, `^`→Jump_fd_origin, `Alt-f`→Set_filter("") (clear).
+  - `j`/`↓`, `k`/`↑`, `g`, `G`: when focus is **Syscall_list** → Select_down/up/top/bottom; when focus is **Detail_pane** → drive the detail scroller (Down/Up/Top/Bottom).
+  - `Ctrl-d`/`d`/`PageDown` and `Ctrl-u`/`u`/`PageUp`: when focus is **Syscall_list** → page by the **full** list viewport height (`Jump_to_filtered_index(selected ± left_height)`, clamped) — note: full height, not half; when focus is **Detail_pane** → scroller half-screen down/up.
+
+  Async effects via Textual workers / asyncio:
   - **strace reader**: read lines from the pipe, dispatch `AddLine`.
   - **man-page fetch** on selection/`show_man_page` change for uncached syscalls: `man --nj <section> <name>` with `MANWIDTH` env, → `Set_man_page`.
   - **reverse-DNS** for unresolved IPs in the selected line's args: `gethostbyaddr` in a thread executor, → `Set_dns_entry`.
