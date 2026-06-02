@@ -52,32 +52,28 @@ class SyscallListWidget(Widget):
             self._border_color = color
             self.styles.border = ("round", color)
 
-    def render(self) -> RenderResult:
+    def update_chrome(self) -> None:
+        """Set the border title/subtitle/colour from the current model state.
+
+        This MUST be called from the dispatch path (before the content
+        ``refresh()``), NOT from ``render()``: assigning a border property
+        schedules its own refresh, so setting it during ``render()`` makes the
+        border lag one frame behind the content (the filter buffer would show
+        one keystroke late). Setting it here, before the frame renders, keeps
+        the border in sync with the content it labels.
+        """
         model: Model = self._app_ref.model
         theme: Theme = self._app_ref.ui_theme
-        width = self.size.width
-        # Account for border (2 cols) - inner width
-        inner_width = max(1, width - 2)
-        height = self.size.height
-        # Account for border (2 rows)
-        inner_height = max(1, height - 2)
-
+        inner_width = max(1, self.size.width - 2)
         fc = model.filtered_count()
+        pos_str = f"{model.selected_index() + 1}/{fc}" if fc > 0 else "0/0"
 
-        # Position indicator
-        if fc > 0:
-            pos_str = f"{model.selected_index() + 1}/{fc}"
-        else:
-            pos_str = "0/0"
-
-        # --- Filter editor state: make "actively editing" unmistakable -------
         if is_editing(model.filter_editor):
             # Editing: light up the border, swap the title to a clear prompt,
             # and show the buffer with a visible block cursor (the styled
             # reverse-video cursor can't survive in a plain border string).
             ed = model.filter_editor
-            buf, cursor = ed.buf, ed.cursor
-            shown = buf[:cursor] + "█" + buf[cursor:]  # █ block cursor
+            shown = ed.buf[: ed.cursor] + "█" + ed.buf[ed.cursor :]  # █ block cursor
             self._set_border_color(theme.accent)
             self.border_title = "✎ FILTER  (↵ apply · esc cancel)"
             self.border_subtitle = f"❯ {shown}"
@@ -95,6 +91,18 @@ class SyscallListWidget(Widget):
             self._set_border_color(theme.dim)
             self.border_title = f"Syscalls{focus_hint}"
             self.border_subtitle = f"{filter_text}  {pos_str}" if filter_text else pos_str
+
+    def render(self) -> RenderResult:
+        model: Model = self._app_ref.model
+        theme: Theme = self._app_ref.ui_theme
+        width = self.size.width
+        # Account for border (2 cols) - inner width
+        inner_width = max(1, width - 2)
+        height = self.size.height
+        # Account for border (2 rows)
+        inner_height = max(1, height - 2)
+
+        fc = model.filtered_count()
 
         if fc == 0:
             msg = Text("Waiting for syscalls...", style=Style(color=theme.dim))

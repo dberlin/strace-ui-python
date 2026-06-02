@@ -329,6 +329,33 @@ async def test_filter_label_shows_expr():
 
 
 @pytest.mark.asyncio
+async def test_filter_buffer_updates_without_extra_frame():
+    """The border must reflect a keystroke immediately after dispatch — not one
+    frame later. Setting border chrome inside render() lagged it one keystroke
+    behind; it is now set synchronously in the dispatch path."""
+    from strace_ui import filter_editor as FE
+    from strace_ui.model import FilterEdit
+    from strace_ui.widgets import SyscallListWidget
+
+    app = StraceUiApp(
+        model=default_model(resolve_pid_info=lambda pid: None),
+        theme=get_theme(default_theme_name()),
+        strace_argv=None,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.query_one(SyscallListWidget)
+        # Dispatch directly with NO render frame between the keystroke and the
+        # assertion — this is exactly the interactive "one character behind"
+        # condition.
+        app.dispatch(FilterEdit(FE.Start()))
+        app.dispatch(FilterEdit(FE.Key("m")))
+        assert "m" in str(pane.border_subtitle), "filter buffer lagged behind the keystroke"
+        assert "█" in str(pane.border_subtitle)
+        assert "FILTER" in str(pane.border_title)
+
+
+@pytest.mark.asyncio
 async def test_filter_edit_mode_is_visually_distinct():
     """While editing, the list pane shows a clear FILTER prompt + block cursor;
     when not editing it shows the normal Syscalls title."""

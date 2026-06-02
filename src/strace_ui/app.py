@@ -201,6 +201,10 @@ class StraceUiApp(App):
     def _refresh_widgets(self, *, force_detail: bool = False) -> None:
         try:
             list_widget = self.query_one(SyscallListWidget)
+            # Set border chrome (filter text, position, edit state) BEFORE the
+            # content refresh so it paints in the same frame — setting it inside
+            # render() would lag the border one keystroke behind the content.
+            list_widget.update_chrome()
             list_widget.refresh()
         except Exception:
             pass
