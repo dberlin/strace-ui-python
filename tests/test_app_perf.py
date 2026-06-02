@@ -79,3 +79,30 @@ async def test_detail_rerenders_on_render_mode_change():
         await pilot.press("x")  # cycle render mode -> detail content changes
         await pilot.pause()
         assert calls["n"] >= 1, "detail did not re-render when render mode changed"
+
+
+# --- O(1)-per-line scaling guards (structural, not timing-based) -------------
+
+def test_virtual_list_append_shares_backing_o1():
+    """append must not copy the backing lists (O(1), shared) — guards O(n^2)."""
+    from strace_ui.virtual_list import VirtualList
+
+    vl1 = VirtualList.create()
+    vl2 = vl1.append("a", passes_filter=True)
+    vl3 = vl2.append("b", passes_filter=True)
+    # Shared backing store across versions => no per-append copy.
+    assert vl2.all_items is vl1.all_items
+    assert vl3.all_items is vl1.all_items
+    assert vl2.filtered_indices is vl1.filtered_indices
+
+
+def test_apply_action_does_not_copy_resolved_fds():
+    """AddLine must mutate resolved_fds in place (O(1)), not copy it per line."""
+    m1 = default_model(resolve_pid_info=lambda pid: None)
+    from strace_ui.model import apply_action
+
+    m2 = apply_action(m1, AddLine(L1))
+    m3 = apply_action(m2, AddLine(L2))
+    # Same dict object threaded through => no O(n) copy on each appended line.
+    assert m3.resolved_fds is m2.resolved_fds
+    assert len(m3.resolved_fds) == 2

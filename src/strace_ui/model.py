@@ -598,7 +598,12 @@ def apply_action(model: Model, action: object) -> Model:
         if isinstance(parsed.result, parser.Unfinished):
             # Record as pending; resolve fds with current tracker (before update)
             fd_ids = resolve_fds(parsed, fd_tracker=model.fd_tracker)
-            resolved = {**model.resolved_fds, parsed.index: fd_ids}
+            # Mutate resolved_fds in place (O(1)). The model is forward-only
+            # (we never revert to an earlier version), so sharing the dict is
+            # safe and avoids an O(n) copy on every appended syscall — which
+            # made high-volume traces O(n^2) and starved the event loop.
+            model.resolved_fds[parsed.index] = fd_ids
+            resolved = model.resolved_fds
             new_list = model.syscall_list.append(
                 parsed,
                 passes_filter=passes_filter(
@@ -628,8 +633,10 @@ def apply_action(model: Model, action: object) -> Model:
                 fd_ids_after = resolve_fds(merged, fd_tracker=new_tracker)
                 fd_ids = sorted(set(fd_ids_before + fd_ids_after))
 
-                resolved = {**model.resolved_fds, merged.index: fd_ids}
-                resolved = re_resolve_child_fds(new_list, new_tracker, resolved, merged)
+                model.resolved_fds[merged.index] = fd_ids  # in-place, O(1) (forward-only)
+                resolved = re_resolve_child_fds(
+                    new_list, new_tracker, model.resolved_fds, merged
+                )
 
                 pending = {k: v for k, v in model.pending_syscalls.items() if k != parsed.pid}
                 return dataclasses.replace(
@@ -649,7 +656,8 @@ def apply_action(model: Model, action: object) -> Model:
                 new_tracker = model.fd_tracker.update(parsed)
                 fd_ids_after = resolve_fds(parsed, fd_tracker=new_tracker)
                 fd_ids = sorted(set(fd_ids_before + fd_ids_after))
-                resolved = {**model.resolved_fds, parsed.index: fd_ids}
+                model.resolved_fds[parsed.index] = fd_ids  # in-place, O(1) (forward-only)
+                resolved = model.resolved_fds
                 new_list = model.syscall_list.append(
                     parsed,
                     passes_filter=passes_filter(
@@ -671,7 +679,8 @@ def apply_action(model: Model, action: object) -> Model:
             new_tracker = model.fd_tracker.update(parsed)
             fd_ids_after = resolve_fds(parsed, fd_tracker=new_tracker)
             fd_ids = sorted(set(fd_ids_before + fd_ids_after))
-            resolved = {**model.resolved_fds, parsed.index: fd_ids}
+            model.resolved_fds[parsed.index] = fd_ids  # in-place, O(1) (forward-only)
+            resolved = model.resolved_fds
             new_list = model.syscall_list.append(
                 parsed,
                 passes_filter=passes_filter(

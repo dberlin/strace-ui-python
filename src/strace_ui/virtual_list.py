@@ -1,9 +1,12 @@
-"""Immutable-style virtual list with filtered view and selected index.
+"""Virtual list with a filtered view and a selected index.
 
-Port of OCaml virtual_list.ml (State module).  Each mutation returns a new
-VirtualList instance; list contents are copied on mutations that change them so
-prior instances are unaffected (value semantics).  Selection-only changes reuse
-the same list objects.
+Port of OCaml virtual_list.ml (State module). Like the original (a mutable
+``Vec`` inside a ``Box``), ``all_items`` and ``filtered_indices`` are a shared
+backing store: ``append`` and ``set_item`` mutate them in place in O(1) and
+return a new wrapper. The model is forward-only (we never revert to an earlier
+version), so sharing is safe and avoids the O(n^2) blow-up that copying the
+lists on every appended syscall caused under high-volume traces. ``refilter``
+(triggered only by a user filter change) rebuilds ``filtered_indices`` fresh.
 """
 from __future__ import annotations
 
@@ -72,28 +75,23 @@ class VirtualList(Generic[T]):
     # ------------------------------------------------------------------
 
     def append(self, item: T, *, passes_filter: bool) -> "VirtualList[T]":
-        """Append *item*.  If it passes the filter, add its index to filtered_indices."""
-        new_all = list(self.all_items)
-        new_all.append(item)
+        """Append *item* in O(1) (shared backing). If it passes the filter, record its index."""
+        self.all_items.append(item)
         if passes_filter:
-            new_filtered = list(self.filtered_indices)
-            new_filtered.append(len(new_all) - 1)
-        else:
-            new_filtered = list(self.filtered_indices)
-        fc = len(new_filtered)
+            self.filtered_indices.append(len(self.all_items) - 1)
+        fc = len(self.filtered_indices)
         new_sel = min(self.selected_index, max(0, fc - 1))
         return VirtualList(
-            all_items=new_all,
-            filtered_indices=new_filtered,
+            all_items=self.all_items,
+            filtered_indices=self.filtered_indices,
             selected_index=new_sel,
         )
 
     def set_item(self, idx: int, item: T) -> "VirtualList[T]":
-        """Replace the item at raw index *idx* without changing the filter."""
-        new_all = list(self.all_items)
-        new_all[idx] = item
+        """Replace the item at raw index *idx* in O(1) (shared backing)."""
+        self.all_items[idx] = item
         return VirtualList(
-            all_items=new_all,
+            all_items=self.all_items,
             filtered_indices=self.filtered_indices,
             selected_index=self.selected_index,
         )
