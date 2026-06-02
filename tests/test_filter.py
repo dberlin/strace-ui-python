@@ -23,6 +23,11 @@ from strace_ui.filter import (
     FilterFd,
     FilterRelatedPid,
     Regex,
+    parse_simple_token,
+    add_exclusion,
+    add_inclusion,
+    add_pid_filter,
+    add_pid_exclusion,
 )
 from strace_ui.schema import Family
 
@@ -128,3 +133,36 @@ def test_passes_related_pid_via_fork():
     assert passes(f, _info("read", 200), fd_tracker=t)
     assert passes(f, _info("read", 100), fd_tracker=t)
     assert not passes(f, _info("read", 999), fd_tracker=t)
+
+
+# ---------------------------------------------------------------------------
+# Task 14: parse_simple_token fallbacks + add_* helpers
+# ---------------------------------------------------------------------------
+
+
+def test_parse_simple_token_nonint_fallbacks():
+    assert parse_simple_token("pid:foo") == IncludeSyscall("pid:foo")
+    assert parse_simple_token("fd:x.y") == IncludeSyscall("fd:x.y")
+    assert parse_simple_token("rel:abc") == IncludeSyscall("rel:abc")
+
+
+def test_parse_simple_token_bang_is_exclude():
+    assert parse_simple_token("!read") == ExcludeSyscall("read")
+
+
+def test_parse_bogus_family_is_include():
+    assert parse_simple_token("%bogus") == IncludeSyscall("%bogus")
+
+
+def test_add_helpers():
+    base = parse("read")
+    assert add_exclusion(base, syscall_name="write")[-1] == ExcludeSyscall("write")
+    assert add_inclusion([], syscall_name="open")[-1] == IncludeSyscall("open")
+    assert add_pid_filter([], pid=5)[-1] == FilterPid(5)
+    assert add_pid_exclusion([], pid=9)[-1] == ExcludePid(9)
+    # original unchanged (value semantics)
+    assert base == parse("read")
+
+
+def test_normalize_empty():
+    assert normalize("") == ""

@@ -5,7 +5,6 @@ Provides a filter expression type (list[Term]) with parsing and serialisation.
 from __future__ import annotations
 
 import re
-import dataclasses
 from dataclasses import dataclass
 from typing import Optional, Union
 
@@ -74,15 +73,6 @@ class Regex:
 
     def __init__(self, pattern: "re.Pattern[str]") -> None:
         self._pattern = pattern
-
-    @classmethod
-    def compile(cls, pattern_str: str) -> "Regex":
-        """Compile a pattern string into a Regex term."""
-        try:
-            compiled = re.compile(pattern_str)
-        except re.error:
-            compiled = re.compile(re.escape(pattern_str))
-        return cls(compiled)
 
     @property
     def pattern(self) -> str:
@@ -364,7 +354,7 @@ class SyscallInfo:
     """Input record for filter evaluation."""
     syscall_name: str
     pid: int
-    fd_ids: list
+    fd_ids: list[FdId]
     raw_line: str
 
 
