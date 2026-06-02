@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import signal
 import socket
 from asyncio import StreamReader, StreamReaderProtocol
 from typing import Optional
@@ -31,8 +30,42 @@ from strace_ui.model import (
 from strace_ui import filter_editor as FE
 from strace_ui import schema as schema_mod
 from strace_ui.display_utils import extract_ip_addresses
+from strace_ui.render import render_help_modal
 from strace_ui.themes import Theme
 from strace_ui.widgets import SyscallListWidget, DetailWidget
+
+
+# ---------------------------------------------------------------------------
+# HelpOverlay
+# ---------------------------------------------------------------------------
+
+class HelpOverlay(Static):
+    """Overlay widget that renders the help modal panel.
+
+    Sits in a top CSS layer; its ``display`` is toggled to show/hide it.
+    """
+
+    DEFAULT_CSS = """
+    HelpOverlay {
+        layer: overlay;
+        width: 60;
+        height: auto;
+        offset-x: 50%;
+        offset-y: 50%;
+        margin-left: -30;
+        margin-top: -12;
+        dock: none;
+        display: none;
+    }
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__("", markup=False, **kwargs)
+
+    def refresh_content(self, theme: Theme, width: int, height: int) -> None:
+        """Re-render the help panel with the given dimensions."""
+        panel = render_help_modal(theme=theme, width=width, height=height)
+        self.update(panel)
 
 
 # ---------------------------------------------------------------------------
@@ -52,10 +85,12 @@ class StraceUiApp(App):
     Screen {
         layout: vertical;
         background: $background;
+        layers: base overlay;
     }
     #main-horizontal {
         height: 1fr;
         layout: horizontal;
+        layer: base;
     }
     #list-pane {
         width: 40;
@@ -94,6 +129,7 @@ class StraceUiApp(App):
         with Horizontal(id="main-horizontal"):
             yield SyscallListWidget(app_ref=self, id="list-pane")
             yield DetailWidget(app_ref=self, id="detail-pane")
+        yield HelpOverlay(id="help-overlay")
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -142,6 +178,18 @@ class StraceUiApp(App):
         try:
             detail_widget = self.query_one(DetailWidget)
             detail_widget.update_detail()
+        except Exception:
+            pass
+        try:
+            overlay = self.query_one(HelpOverlay)
+            show = self.model.show_help
+            if show:
+                overlay.refresh_content(
+                    theme=self.ui_theme,
+                    width=self.size.width,
+                    height=self.size.height,
+                )
+            overlay.display = show
         except Exception:
             pass
 
@@ -214,7 +262,7 @@ class StraceUiApp(App):
     async def _fetch_dns(self, ip: str) -> None:
         """Reverse-DNS lookup for `ip`."""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, socket.gethostbyaddr, ip)
             hostname = result[0]
         except Exception:
@@ -268,7 +316,7 @@ class StraceUiApp(App):
         # Wrap the read fd in an asyncio StreamReader
         reader = StreamReader()
         protocol = StreamReaderProtocol(reader)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             await loop.connect_read_pipe(lambda: protocol, os.fdopen(read_fd, "rb", buffering=0))
         except Exception:

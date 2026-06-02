@@ -5,8 +5,6 @@ DetailWidget     — scrollable detail pane showing render_detail output.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from rich.console import Group
 from rich.text import Text
 from rich.style import Style
@@ -19,9 +17,6 @@ from textual.app import RenderResult
 from strace_ui.render import render_syscall_row_text, render_detail, render_filter_label
 from strace_ui.model import Model, Focus
 from strace_ui.themes import Theme
-
-if TYPE_CHECKING:
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +67,11 @@ class SyscallListWidget(Widget):
         else:
             pos_str = "0/0"
 
+        # Show filter expression/edit buffer AND position counter together.
+        # border_subtitle only accepts str, so use .plain (colour lost on border).
+        filter_text = filter_label.plain.strip()
         self.border_title = f"Syscalls{focus_hint}"
-        self.border_subtitle = f"{pos_str}"
+        self.border_subtitle = f"{filter_text}  {pos_str}" if filter_text else pos_str
 
         if fc == 0:
             msg = Text("Waiting for syscalls...", style=Style(color=theme.dim))
@@ -121,7 +119,13 @@ class DetailWidget(VerticalScroll):
     """Scrollable detail pane.
 
     Contains a single Static whose content is updated via update_detail().
+
+    ``can_focus = False`` prevents Textual from routing arrow/page keys to
+    this widget via normal focus — the app drives scrolling explicitly via
+    the scroll_* helper methods, which work regardless of focus state.
     """
+
+    can_focus = False
 
     DEFAULT_CSS = """
     DetailWidget {

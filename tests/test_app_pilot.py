@@ -5,8 +5,11 @@ Uses strace_argv=None so no actual strace process is launched.
 """
 import pytest
 import pytest_asyncio
+from io import StringIO
 
-from strace_ui.app import StraceUiApp
+from rich.console import Console
+
+from strace_ui.app import StraceUiApp, HelpOverlay
 from strace_ui.model import default_model, AddLine, Focus
 from strace_ui.themes import get_theme, default_theme_name
 
@@ -208,3 +211,154 @@ async def test_detail_focus_scroll():
         await pilot.press("tab")
         await pilot.pause(0.05)
         assert app.model.focus == Focus.SYSCALL_LIST
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: Help overlay rendering tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_help_overlay_visible_toggles():
+    """HelpOverlay widget display must track model.show_help.
+
+    Asserts that the overlay widget is mounted, hidden initially,
+    becomes visible after pressing '?', and hidden again after Escape.
+    Also verifies that the overlay content contains the expected help text.
+    """
+    app = StraceUiApp(
+        model=default_model(resolve_pid_info=lambda pid: None),
+        theme=get_theme(default_theme_name()),
+        strace_argv=None,
+    )
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.dispatch(AddLine('100 1.0 openat(AT_FDCWD, "/a", O_RDONLY) = 3'))
+        await pilot.pause(0.1)
+
+        overlay = app.query_one(HelpOverlay)
+
+        # Initially hidden
+        assert overlay.display is False, "Help overlay must be hidden at startup"
+        assert app.model.show_help is False
+
+        # Toggle on with '?'
+        await pilot.press("question_mark")
+        await pilot.pause(0.05)
+        assert app.model.show_help is True
+        assert overlay.display is True, "Help overlay must be visible when show_help is True"
+
+        # Content must contain the help text (render it via Rich to plain string)
+        buf = StringIO()
+        console = Console(file=buf, no_color=True, width=70)
+        console.print(overlay.content)
+        rendered = buf.getvalue()
+        assert "Keyboard Shortcuts" in rendered, (
+            "Help overlay content must include 'Keyboard Shortcuts'"
+        )
+        assert "Follow selected FD" in rendered, (
+            "Help overlay content must include 'Follow selected FD'"
+        )
+
+        # Dismiss with Escape
+        await pilot.press("escape")
+        await pilot.pause(0.05)
+        assert app.model.show_help is False
+        assert overlay.display is False, "Help overlay must be hidden after dismiss"
+
+
+@pytest.mark.asyncio
+async def test_help_overlay_f1_toggles():
+    """F1 key also toggles the help overlay."""
+    app = StraceUiApp(
+        model=default_model(resolve_pid_info=lambda pid: None),
+        theme=get_theme(default_theme_name()),
+        strace_argv=None,
+    )
+    async with app.run_test(size=(120, 40)) as pilot:
+        overlay = app.query_one(HelpOverlay)
+        assert overlay.display is False
+
+        await pilot.press("f1")
+        await pilot.pause(0.05)
+        assert app.model.show_help is True
+        assert overlay.display is True
+
+        # Any key while help is shown closes it
+        await pilot.press("j")
+        await pilot.pause(0.05)
+        assert app.model.show_help is False
+        assert overlay.display is False
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: Filter label shown in list pane border_subtitle
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_filter_label_shows_expr():
+    """After applying a filter, border_subtitle must contain the filter expression.
+
+    Verifies the fix that render_filter_label() result is actually surfaced
+    in the list pane border text rather than being discarded.
+    """
+    app = StraceUiApp(
+        model=default_model(resolve_pid_info=lambda pid: None),
+        theme=get_theme(default_theme_name()),
+        strace_argv=None,
+    )
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.dispatch(AddLine('100 1.0 read(3, "x", 1) = 1'))
+        await pilot.pause(0.1)
+
+        list_pane = app.query_one("#list-pane")
+
+        # Before any filter the default shows "all"
+        subtitle = list_pane.border_subtitle or ""
+        assert "f:" in subtitle, f"Expected 'f:' prefix in border_subtitle, got: {subtitle!r}"
+
+        # Apply a 'read' filter: press f, type 'r','e','a','d', Enter
+        await pilot.press("f")
+        for ch in "read":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        subtitle = list_pane.border_subtitle or ""
+        assert "read" in subtitle, (
+            f"Expected 'read' in border_subtitle after filter, got: {subtitle!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_filter_label_shows_edit_buffer():
+    """During filter editing the in-progress buffer must appear in border_subtitle."""
+    app = StraceUiApp(
+        model=default_model(resolve_pid_info=lambda pid: None),
+        theme=get_theme(default_theme_name()),
+        strace_argv=None,
+    )
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.dispatch(AddLine('100 1.0 openat(AT_FDCWD, "/a", O_RDONLY) = 3'))
+        await pilot.pause(0.1)
+
+        list_pane = app.query_one("#list-pane")
+
+        # Start editing and type 'ope' — buffer should appear immediately
+        await pilot.press("f")
+        await pilot.pause(0.05)
+        for ch in "ope":
+            await pilot.press(ch)
+        await pilot.pause(0.05)
+
+        subtitle = list_pane.border_subtitle or ""
+        assert "ope" in subtitle, (
+            f"Expected partial buffer 'ope' in border_subtitle during edit, "
+            f"got: {subtitle!r}"
+        )
+
+        # Cancel editing — subtitle reverts to default filter display
+        await pilot.press("escape")
+        await pilot.pause(0.05)
+        subtitle_after = list_pane.border_subtitle or ""
+        assert "ope" not in subtitle_after or "f:" in subtitle_after, (
+            "After cancel, border_subtitle should revert to the committed filter"
+        )
